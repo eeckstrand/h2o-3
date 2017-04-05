@@ -114,7 +114,7 @@ public class FrameUtils {
     }
   }
 
-  private static class Vec2ArryTsk extends MRTask<Vec2ArryTsk> {
+  public static class Vec2ArryTsk extends MRTask<Vec2ArryTsk> {
     final int N;
     public double [] res;
     public Vec2ArryTsk(int N){this.N = N;}

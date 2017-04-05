@@ -613,26 +613,40 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
             model.update(_job); // Update model in K/V store
           }     // end iteration to find eigenvectors
 
-          if (!_parms._only_v && !_parms._keep_u && _wideDataset) {  // dealing with wide dataset per request from PCA, won't want U
+          if (_wideDataset) {  // dealing with wide datasets
             for (int vecIndex = 0; vecIndex < _parms._nv; vecIndex++) {
               model._output._d[vecIndex] = Math.sqrt(model._output._nobs*_estimatedSingularValues[vecIndex]);
             }
             model._output._v = transformEigenVectors(dinfo, transpose(model._output._v));
-          }
 
-          if (!_wideDataset) {
+            double[][] transV = transpose(model._output._v);  // allocate memory as well
+
+            if (!_parms._only_v && _parms._keep_u) { // wide dataset is true and keep u is true as well
+              model._output._u_key = Key.make(u_name);  // U is calculated as A*V
+              uvecs = new Vec[_parms._nv];
+              for (int eigIndex = 0; eigIndex < _parms._nv; eigIndex++) {
+                CalcSigmaU ctsk = new CalcSigmaU(_job._key, dinfo, transV[eigIndex]).doAll(Vec.T_NUM, dinfo._adaptedFrame);
+                Frame tmp = ctsk.outputFrame();
+                uvecs[eigIndex] = tmp.vec(0);
+                tmp.unlock(_job);
+              }
+            }
+          } else {  // normal dataset, not wide
             // 4) Normalize output frame columns by singular values to get left singular vectors
             model._output._v = ArrayUtils.transpose(model._output._v);  // Transpose to get V (since vectors were stored as rows)
             if (!_parms._only_v && !_parms._keep_u) {         // Delete U vecs if computed, but user does not want it returned
               for (Vec uvec : uvecs) uvec.remove();
               model._output._u_key = null;
-            } else if (!_parms._only_v && _parms._keep_u) {   // Divide U cols by singular values and save to DKV
-              u = new Frame(model._output._u_key, null, uvecs);
-              DKV.put(u._key, u);
-              DivideU utsk = new DivideU(model._output._d);
-              utsk.doAll(u);
             }
           }
+
+          if (!_parms._only_v && _parms._keep_u) {  // divide U by corresponding singular value.
+            u = new Frame(model._output._u_key, null, uvecs);
+            DKV.put(u._key, u);
+            DivideU utsk = new DivideU(model._output._d);
+            utsk.doAll(u);
+          }
+
 
           LinkedHashMap<String, ArrayList> scoreTable = new LinkedHashMap<String, ArrayList>();
           scoreTable.put("Timestamp", model._output._training_time_ms);
