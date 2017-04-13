@@ -803,13 +803,14 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 										objtskw = new ObjCalcW(_parms, yt, colCount, _ncolX, tinfo._cats, model._output._normSub,
 																		model._output._normMul, model._output._lossFunc, weightId, regX, xwF);
 										objtskw.doAll(fr);
+          model._output._objective = objtskw._loss + _parms._gamma_x * objtskw._xold_reg + _parms._gamma_y * yreg;
 								} else {
 										objtsk = new ObjCalc(_parms, yt, colCount, _ncolX, tinfo._cats, model._output._normSub,
 																		model._output._normMul, model._output._lossFunc, weightId, regX);
 										objtsk.doAll(fr);
+          model._output._objective = objtsk._loss + _parms._gamma_x * objtsk._xold_reg + _parms._gamma_y * yreg;
 								}
 
-        model._output._objective = objtsk._loss + _parms._gamma_x * objtsk._xold_reg + _parms._gamma_y * yreg;
         model._output._archetypes_raw = yt;
         model._output._iterations = 0;
         model._output._updates = 0;
@@ -827,15 +828,16 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           // TODO: Should step be divided by number of original or expanded (with 0/1 categorical) cols?
           // 1) Update X matrix given fixed Y
 
-          // find out how much time it takes to update x
-          UpdateX xtsk = new UpdateX(_parms, yt, step/_ncolA, overwriteX, _ncolA, _ncolX, tinfo._cats, model._output._normSub, model._output._normMul, model._output._lossFunc, weightId);
+          // find out how much time it takes to update x, for wide dataset, it is updating Y
+          UpdateX xtsk = new UpdateX(_parms, yt, step/_ncolA, overwriteX, _ncolA, _ncolX, tinfo._cats,
+                  model._output._normSub, model._output._normMul, model._output._lossFunc, weightId);
 
           xtsk.doAll(dinfo._adaptedFrame);
           model._output._updates++;
 
           // 2) Update Y matrix given fixed X
           if (model._output._updates < _parms._max_updates) {
-            // If max_updates is odd, we will terminate after the X update
+            // If max_updates is odd, we will terminate after the X update, for wide dataset, it updates Y
             UpdateY ytsk = new UpdateY(_parms, yt, step/_ncolA, _ncolA, _ncolX, tinfo._cats,
                     model._output._normSub, model._output._normMul, model._output._lossFunc, weightId);
             double[][] yttmp = ytsk.doAll(dinfo._adaptedFrame)._ytnew;
@@ -1542,6 +1544,133 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     }
   }
 
+  // used for wide dataset, it is actually updating Y right here which is the transpose of X
+  private static class UpdateXW extends MRTask<UpdateXW> {
+    // Input
+    GLRMParameters _parms;
+    GlrmLoss[] _lossFunc;
+    final double _alpha;      // Step size divided by num cols in A
+    final Archetypes _ytold;  // Old Y' matrix
+    final int _ncolA;         // Number of cols in training frame
+    final int _ncolX;         // Number of cols in X (k)
+    final int _ncats;         // Number of categorical cols in training frame
+    final double[] _normSub;  // For standardizing training data
+    final double[] _normMul;
+    final int _weightId;
+
+    // Output
+    double[][] _ytnew;  // New Y matrix
+    double _yreg;       // Regularization evaluated on new Y
+
+    UpdateXW(GLRMParameters parms, Archetypes yt, double alpha, int ncolA, int ncolX, int ncats, double[] normSub,
+            double[] normMul, GlrmLoss[] lossFunc, int weightId) {
+      assert yt != null && yt.rank() == ncolX;
+      _parms = parms;
+      _lossFunc = lossFunc;
+      _alpha = alpha;
+      _ncolA = ncolA;
+      _ncolX = ncolX;
+      _ytold = yt;
+      _yreg = 0;
+
+      // Info on A (cols 1 to ncolA of frame)
+      assert ncats <= ncolA;
+      _ncats = ncats;
+      _weightId = weightId;
+      _normSub = normSub;
+      _normMul = normMul;
+    }
+
+    private Chunk chk_xnew(Chunk[] chks, int c) {
+      return chks[_ncolA + _ncolX + c];
+    }
+
+    @Override public void map(Chunk[] cs) {
+      assert (_ncolA + 2*_ncolX) == cs.length;
+      _ytnew = new double[_ytold.nfeatures()][_ncolX];
+      Chunk chkweight = _weightId >= 0 ? cs[_weightId]:new C0DChunk(1,cs[0]._len);
+      double[] xy = null;
+      double[] grad = null;
+      if (_ytold._numLevels[0] > 0) {
+        xy = new double[_ytold._numLevels[0]];
+        grad = new double[_ytold._numLevels[0]];
+      }
+
+      // Categorical columns
+      for (int j = 0; j < _ncats; j++) {
+        int catColJLevel = _ytold._numLevels[j];
+        // Compute gradient of objective at column
+        for (int row = 0; row < cs[0]._len; row++) {
+          double a = cs[j].atd(row);
+          if (Double.isNaN(a)) continue;   // Skip missing observations in column
+          double cweight = chkweight.atd(row);
+          assert !Double.isNaN(cweight) : "User-specified weight cannot be NaN";
+
+          // Calculate x_i * Y_j where Y_j is sub-matrix corresponding to categorical col j
+          Arrays.fill(xy, 0.0);
+          for (int level = 0; level < catColJLevel; level++) {
+            for (int k = 0; k < _ncolX; k++) {
+              xy[level] += chk_xnew(cs, k).atd(row) * _ytold.getCat(j,level,k);
+            }
+          }
+
+          // Gradient for level p is x_i weighted by \grad_p L_{i,j}(x_i * Y_j, A_{i,j})
+          double[] weight = _lossFunc[j].mlgrad(xy, (int)a, grad,catColJLevel);
+          for (int level = 0; level < catColJLevel; level++) {
+            for (int k = 0; k < _ncolX; k++)
+              _ytnew[_ytold.getCatCidx(j, level)][k] += cweight * weight[level] * chk_xnew(cs, k).atd(row);
+          }
+        }
+      }
+
+      // Numeric columns
+      for (int j = _ncats; j < _ncolA; j++) {
+        int js = j - _ncats;
+        int yidx = _ytold.getNumCidx(js);
+
+        // Compute gradient of objective at column
+        for (int row = 0; row < cs[0]._len; row++) {
+          double a = cs[j].atd(row);
+          if (Double.isNaN(a)) continue;   // Skip missing observations in column
+
+          // Additional user-specified weight on loss for this row
+          double cweight = chkweight.atd(row);
+          assert !Double.isNaN(cweight) : "User-specified weight cannot be NaN";
+
+          // Inner product x_i * y_j
+          double txy = 0;
+          for (int k = 0; k < _ncolX; k++)
+            txy += chk_xnew(cs, k).atd(row) * _ytold.getNum(js,k);
+
+          // Sum over x_i weighted by gradient of loss \grad L_{i,j}(x_i * y_j, A_{i,j})
+          double weight = cweight * _lossFunc[j].lgrad(txy, (a - _normSub[js]) * _normMul[js]);
+          for (int k = 0; k < _ncolX; k++)
+            _ytnew[yidx][k] += weight * chk_xnew(cs, k).atd(row);
+        }
+      }
+    }
+
+    @Override public void reduce(UpdateXW other) {
+      ArrayUtils.add(_ytnew, other._ytnew);
+    }
+
+    @Override protected void postGlobal() {
+      assert _ytnew.length == _ytold.nfeatures() && _ytnew[0].length == _ytold.rank();
+      Random rand = RandomUtils.getRNG(_parms._seed);
+
+      // Compute new y_j values using proximal gradient
+      for (int j = 0; j < _ytnew.length; j++) {
+        double[] u = new double[_ytnew[0].length];  // Do not touch this memory allocation.  Needed for proper function.
+        for (int k = 0; k < _ytnew[0].length; k++)
+          u[k] = _ytold._archetypes[j][k] - _alpha * _ytnew[j][k];
+
+        _ytnew[j] = _parms._regularization_y.rproxgrad(u, _alpha*_parms._gamma_y, rand);
+        _yreg += _parms._regularization_y.regularize(_ytnew[j]);
+      }
+    }
+  }
+
+
   private static class UpdateY extends MRTask<UpdateY> {
     // Input
     GLRMParameters _parms;
@@ -1721,11 +1850,12 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       double[] chkweight = _yt._weights; // weight per sample
       int tArowStart = (int) cs[0].start();
       int tArowEnd = (int) cs[0]._len+tArowStart-1; // last row index
-      Chunk[] xChunks = new Chunk[_parms._k]; // number of columns
+      Chunk[] xChunks = new Chunk[_parms._k*2]; // number of columns, store old and new X
       int startxcidx = cs[0].cidx();
       ArrayList<Integer> xChunkIndices= findXChunkIndices(tArowStart, tArowEnd, startxcidx);  // contains x chunks to get
       double[] xy = null;   // store the vector of categoricals for one column
       double[] xrow = new double[_parms._k];
+      int numColIndexOffset = _yt._catOffsets[_ncats]-_ncats;   // index into xframe numerical columns
 
       if (_yt._numLevels[0] > 0) {
         xy = new double[_yt._numLevels[0]];   // allocate memory only if there are categoricals
@@ -1743,10 +1873,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         if (tARow < _ncats)  { // dealing with categorical columns now
           // perform comparison for categoricals
           int catRowLevel = _yt._numLevels[tARow];    // number of bits to expand a categorical columns
-
-          if (_regX) {
-            calXOldReg(xChunks, xrow, xChunkRowStart, _yt._catOffsets[tARow], catRowLevel, xChunkSize);
-          }
 
           for (int colIndex = 0; colIndex < cs.length; colIndex++) {  // look at one element of T(A)
             double a = cs[colIndex].atd(rowIndex);    // grab an element of T(A)
@@ -1777,7 +1903,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
         } else {  // looking into numerical columns here
           // perform comparison for numericals
-          xRow = rowIndex+_yt._catOffsets[_ncats]-xChunkRowStart;
+          xRow = rowIndex-xChunkRowStart+numColIndexOffset;
 
           if (xRow >= xChunkSize) {  // load in new chunk of xFrame
             if (xChunkIndices.size() < 1) {
@@ -1787,14 +1913,11 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
               xChunkRowStart = (int) xChunks[0].start();   // first row index of xFrame
               xChunkSize = (int) xChunks[0]._len;   // number of rows in xFrame
-              xRow = rowIndex+_yt._catOffsets[_ncats]-xChunkRowStart;
+              xRow = rowIndex-xChunkRowStart+numColIndexOffset;
             }
           }
 
-          if (_regX) {
-            calXOldReg(xChunks, xrow, xChunkRowStart, _yt._catOffsets[_ncats], 1, xChunkSize);
-          }
-
+          int numRow = tARow-_ncats;
           for (int colIndex=0; colIndex < cs.length; colIndex++) {
             double a = cs[colIndex].atd(rowIndex);
             if (Double.isNaN(a)) continue;
@@ -1802,28 +1925,27 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             for (int innerCol=0; innerCol < _parms._k; innerCol++) {
               txy += xFrameVec(xChunks, innerCol, _parms._k).atd(xRow) * _yt._archetypes[colIndex][innerCol];
             }
-            _loss += chkweight[colIndex]*_lossFunc[tARow].loss(txy, (a-_normSub[tARow])*_normMul[tARow]);
+            _loss += chkweight[colIndex]*_lossFunc[tARow].loss(txy, (a-_normSub[numRow])*_normMul[numRow]);
           }
         }
       }
+
+      // here, reg_x is meant for the y vectors
+      if (_regX) {
+        calXOldReg(_yt._archetypes, xrow, _yt._archetypes.length);
+      }
 				}
 
-				private void calXOldReg(Chunk[] chks, double[] xrow, int xChunkRowStart, int catOffsets, int catRowLevel,
-                            int xChunkSize) {
-				  for (int level=0; level < catRowLevel; level++) {
-				    int xRow = level+catOffsets-xChunkRowStart;
-				    if (xRow >= xChunkSize) {
-				      return; // done
-        }
-        for (int j = 0; j < chks.length; j++) {
-          xrow[j] = chks[j].atd(xRow);
-        }
+				private void calXOldReg(double[][] yvals, double[] xrow, int yLen) {
+      for (int j = 0; j < yLen; j++) {
+        xrow = Arrays.copyOf(yvals[j], _parms._k);
         _xold_reg += _parms._regularization_x.regularize(xrow);
       }
     }
 
 				private void getXChunk(Frame xVecs, int chunkIdx, Chunk[] xChunks) {
-      for (int j = 0; j < _parms._k; ++j) {  // read in the relevant xVec chunks
+				  int xWidth = xChunks.length;  // width of x and xold matices
+      for (int j = 0; j < xWidth; ++j) {  // read in the relevant xVec chunks
         xChunks[j] = xVecs.vec(j).chunkForChunkIdx(chunkIdx);
       }
     }
