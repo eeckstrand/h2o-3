@@ -2,34 +2,65 @@ package hex.sensitivityanalysis;
 
 import hex.Model;
 import hex.genmodel.utils.DistributionFamily;
+import water.MRTask;
 import water.exceptions.H2OIllegalArgumentException;
+import water.fvec.Chunk;
 import water.fvec.Frame;
 import water.fvec.Vec;
 import water.DKV;
+import water.H2O;
+import water.util.Log;
 
 public class SensitivityAnalysis {
 
-    public Frame frame;
-    public Model model;
-
-    public SensitivityAnalysis(Frame inputFrame, Model inputModel) {
-
-        frame = inputFrame;
-        model = inputModel;
-
-    }
-
-    public static Frame SensitivyAnalysisTask(Model m, Frame fr){
+    public static Frame sensitivyAnalysisTask(Model m, Frame fr){
 
         Frame sensitivityAnalysisFrame = new Frame();
         sensitivityAnalysisFrame.add("BasePred",getBasePredictions(m,fr));
         String[] predictors = m._output._names;
 
-        for(int i = 0; i < predictors.length-1; i++){
-            sensitivityAnalysisFrame.add("PredDrop_" + predictors[i], getNewPredictions(m,fr,predictors[i]));
+        SensitivityAnalysisPass[] tasks = new SensitivityAnalysisPass[predictors.length-1];
+
+        for(int i = 0; i < tasks.length; i++){
+            tasks[i] = new SensitivityAnalysisPass(sensitivityAnalysisFrame,fr,m,predictors[i]);
         }
 
+        ParallelTasks sensitivityCollector = new ParallelTasks<>(tasks);
+        long start = System.currentTimeMillis();
+        H2O.submitTask(sensitivityCollector).join();
+        for(int i =0; i < tasks.length; i++){
+            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor,tasks[i]._result);
+        }
+        Log.info("Sensitivity Analysis finished in " +
+                (System.currentTimeMillis()-start)/1000. +
+                " seconds for " + predictors.length + " columns");
+
         return sensitivityAnalysisFrame;
+
+    }
+
+    private static class SensitivityAnalysisPass extends H2O.H2OCountedCompleter<SensitivityAnalysisPass>{
+
+        private final Frame _sensitivityFrame;
+        private final Frame _frame;
+        private final Model _model;
+        private final String _predictor;
+        Vec _result;
+
+        public SensitivityAnalysisPass(Frame sensitivityFrame, Frame fr, Model m, String predictor){
+            _sensitivityFrame = sensitivityFrame;
+            _frame = fr;
+            _model = m;
+            _predictor = predictor;
+        }
+
+        @Override
+        public void compute2() {
+            _result = getNewPredictions(_model,_frame,_predictor);
+            new DiffTask().doAll(_sensitivityFrame.vec(0),_result);
+            Log.info("Completed Sensitivity Analysis for column: " + _predictor);
+            tryComplete();
+        }
 
     }
 
@@ -73,6 +104,17 @@ public class SensitivityAnalysis {
             DKV.remove(workerFrame._key);
         }
 
+    }
+
+    private static class DiffTask extends MRTask<DiffTask>{
+        @Override public void map(Chunk[] c) {
+            Chunk _basePred = c[0]; //First column is always base predictions
+            for(int chnk = 1; chnk < c.length; chnk++){
+                for(int row = 0; row < c[0]._len; row++){
+                    c[chnk].set(row,_basePred.atd(row) - c[chnk].atd(row));
+                }
+            }
+        }
     }
 
 }
