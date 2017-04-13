@@ -111,7 +111,7 @@ public class SensitivityAnalysis {
             Chunk _basePred = c[0]; //First column is always base predictions
             for(int chnk = 1; chnk < c.length; chnk++){
                 for(int row = 0; row < c[0]._len; row++){
-                    c[chnk].set(row,_basePred.atd(row) - c[chnk].atd(row));
+                    c[chnk].set(row, c[chnk].atd(row) - _basePred.atd(row));
                 }
             }
         }
