@@ -6,7 +6,7 @@ import hex.Model;
 import water.fvec.Frame;
 import water.api.Handler;
 import water.api.ModelsHandler;
-import hex.sensitivityanalysis.SensitivityAnalysis;
+import hex.mli.loco.SensitivityAnalysis;
 import water.Key;
 import water.DKV;
 import water.api.schemas3.KeyV3;

@@ -1,8 +1,9 @@
-package hex.sensitivityanalysis;
+package hex.mli.loco;
 
 import hex.Model;
 import hex.genmodel.utils.DistributionFamily;
 import water.MRTask;
+import water.ParallelizationTask;
 import water.fvec.Chunk;
 import water.fvec.Frame;
 import water.fvec.Vec;
@@ -24,7 +25,7 @@ public class SensitivityAnalysis {
             tasks[i] = new SensitivityAnalysisPass(sensitivityAnalysisFrame,fr,m,predictors[i]);
         }
 
-        ParallelTasks sensitivityCollector = new ParallelTasks<>(tasks);
+        ParallelizationTask sensitivityCollector = new ParallelizationTask<>(tasks);
         long start = System.currentTimeMillis();
         H2O.submitTask(sensitivityCollector).join();
         for(int i =0; i < tasks.length; i++){
