@@ -6,8 +6,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ParallelTasks<T extends H2O.H2OCountedCompleter<T>> extends H2O.H2OCountedCompleter {
     private final AtomicInteger _ctr; // Concurrency control
-    private static int DEFAULT_MAX_PARALLEL_TASKS = -1;    // Max number of concurrent columns
-    private final T[] _tasks;         // task holder (will be 1 per column)
+    private static int DEFAULT_MAX_PARALLEL_TASKS = -1;
+    private final T[] _tasks; // Task holder
     transient private int _maxParallelTasks;
 
     public ParallelTasks(T[] tasks) {

@@ -3,7 +3,6 @@ package hex.sensitivityanalysis;
 import hex.Model;
 import hex.genmodel.utils.DistributionFamily;
 import water.MRTask;
-import water.exceptions.H2OIllegalArgumentException;
 import water.fvec.Chunk;
 import water.fvec.Frame;
 import water.fvec.Vec;
