@@ -1562,7 +1562,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
     // Output
     double _loss;    // Loss evaluated on A - XY using new X (and current Y)
-    double _xreg;    // Regularization evaluated on new X
+    double _xreg;    // Regularization evaluated on new Y
+    double[][] _ytnew;    // New Y matrix
 
     UpdateXeY(GLRMParameters parms, Archetypes yt, double alpha, boolean update, int ncolA, int ncolX, int ncats,
             double[] normSub, double[] normMul, GlrmLoss[] lossFunc, int weightId, Frame xVec) {
@@ -1575,6 +1576,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       _ncolA = ncolA;
       _ncolX = ncolX;
       _xVecs = xVec;
+      _ytnew = new double[_yt._archetypes.length][_yt._archetypes[0].length];
 
       // Info on A (cols 1 to ncolA of frame)
       assert ncats <= ncolA;
@@ -1592,7 +1594,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     }
 
     @SuppressWarnings("ConstantConditions")  // The method is too complex for IntelliJ
-    @Override public void map(Chunk[] cs) {
+    @Override public void map(Chunk[] cs) { // cs contains T(A)
       assert (_ncolA + 2*_ncolX) == cs.length;
       double[] a = new double[_ncolA];
       double[] tgrad = new double[_ncolX];  // new gradient calculation with reduced memory allocation
@@ -1601,21 +1603,16 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       Random rand = RandomUtils.getRNG(0);
       _loss = _xreg = 0;
       double[] xy = null;
-      double[] prod = null;
+      double[] grad = null;
+
       if (_yt._numLevels[0] > 0) {
         xy = new double[_yt._numLevels[0]]; // maximum categorical level column is always the first one
-        prod = new double[_yt._numLevels[0]];
+        grad = new double[_yt._numLevels[0]];
       }
 
-      for (int row = 0; row < cs[0]._len; row++) {
+      for (int row = 0; row < cs[0]._len; row++) {  // go through each column of T(A)
         rand.setSeed(_parms._seed + cs[0].start() + row); //global row ID determines the seed
         Arrays.fill(tgrad, 0.0);  // temporary gradient for comparison
-
-        // Copy old working copy of X to current X if requested
-        if (_update) {
-          for (int k = 0; k < _ncolX; k++)
-            chk_xold(cs, k).set(row, chk_xnew(cs, k).atd(row));
-        }
 
         // Compute gradient of objective at row
         // Categorical columns
@@ -1981,7 +1978,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
   }
 
 		// Calculate the sum over the loss function in the optimization objective for wideDatasets
-		private class ObjCalcW extends MRTask<ObjCalcW> {
+		private static class ObjCalcW extends MRTask<ObjCalcW> {
 				// Input
 				GLRMParameters _parms;
 				GlrmLoss[] _lossFunc;
@@ -1997,7 +1994,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
 				// Output
 				double _loss;       // Loss evaluated on A - XY using new X (and current Y)
-				double _xold_reg;   // Regularization evaluated on old X
+				static double _xold_reg;   // Regularization evaluated on old X
 
 				ObjCalcW(GLRMParameters parms, Archetypes yt, int ncolA, int ncolX, int ncats, double[] normSub, double[] normMul,
 												GlrmLoss[] lossFunc, int weightId, Frame xVecs) {
@@ -2069,7 +2066,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
               if (xRow >= xChunkSize) {  // load in new chunk of xFrame
                 if (xChunkIndices.size() < 1) {
-                  error("GLRM train", "Chunks mismatch between A transpose and X frame.");
+                  Log.err("GLRM train", "Chunks mismatch between A transpose and X frame.");
                 } else {
                   getXChunk(xVecs, xChunkIndices.remove(0), xChunks); // get a xVec chunk
 
@@ -2091,7 +2088,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
           if (xRow >= xChunkSize) {  // load in new chunk of xFrame
             if (xChunkIndices.size() < 1) {
-              error("GLRM train", "Chunks mismatch between A transpose and X frame.");
+              Log.err("GLRM train", "Chunks mismatch between A transpose and X frame.");
             } else {
               getXChunk(xVecs, xChunkIndices.remove(0), xChunks); // get a xVec chunk
 
