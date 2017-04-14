@@ -13,7 +13,7 @@ import water.util.Log;
 
 public class SensitivityAnalysis {
 
-    public static Frame sensitivyAnalysisTask(Model m, Frame fr){
+    public static Frame sensitivyAnalysis(Model m, Frame fr){
 
         Frame sensitivityAnalysisFrame = new Frame();
         sensitivityAnalysisFrame.add("BasePred",getBasePredictions(m,fr));
@@ -68,16 +68,18 @@ public class SensitivityAnalysis {
 
         Frame basePredsFr = m.score(fr,null,null,false);
 
-        if(m._parms._distribution == DistributionFamily.gaussian) {
-            Vec basePreds = basePredsFr.remove(0);
-            basePredsFr.delete();
-            return basePreds;
-        } else if(m._parms._distribution == DistributionFamily.bernoulli) {
+        if(m._parms._distribution == DistributionFamily.bernoulli) {
             Vec basePreds = basePredsFr.remove(2);
             basePredsFr.delete();
             return basePreds;
+        } else if(m._parms._distribution == DistributionFamily.multinomial) {
+            Vec basePreds = basePredsFr.remove(0);
+            basePredsFr.delete();
+            return basePreds;
         } else {
-            throw new H2OIllegalArgumentException("Sensitivity Analysis is not supported for distribution " + m._parms._distribution);
+            Vec basePreds = basePredsFr.remove(0);
+            basePredsFr.delete();
+            return basePreds;
         }
 
     }
@@ -89,16 +91,18 @@ public class SensitivityAnalysis {
         DKV.put(workerFrame);
         Frame modifiedPredictionsFr = m.score(workerFrame,null,null,false);
         try {
-            if (m._parms._distribution == DistributionFamily.gaussian) {
-                Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
-                modifiedPredictionsFr.delete();
-                return modifiedPrediction;
-            } else if (m._parms._distribution == DistributionFamily.bernoulli) {
+            if (m._parms._distribution == DistributionFamily.bernoulli) {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(2);
                 modifiedPredictionsFr.delete();
                 return modifiedPrediction;
+            } else if (m._parms._distribution == DistributionFamily.multinomial) {
+                Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
+                modifiedPredictionsFr.delete();
+                return modifiedPrediction;
             } else {
-                throw new H2OIllegalArgumentException("Sensitivity Analysis is not supported for distribution " + m._parms._distribution);
+                Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
+                modifiedPredictionsFr.delete();
+                return modifiedPrediction;
             }
         } finally{
             DKV.remove(workerFrame._key);
