@@ -1544,8 +1544,191 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     }
   }
 
-  // used for wide dataset, it is actually updating Y right here which is the transpose of X
-  private static class UpdateXW extends MRTask<UpdateXW> {
+  // under wide dataset, this is equivalent to updating Y
+  private static class UpdateXeY extends MRTask<UpdateXeY> {
+    // Input
+    GLRMParameters _parms;
+    GlrmLoss[] _lossFunc;
+    final double _alpha;      // Step size divided by num cols in A
+    final boolean _update;    // Should we update X from working copy?
+    final Archetypes _yt;     // _yt = Y' (transpose of Y)
+    final int _ncolA;         // Number of cols in training frame
+    final int _ncolX;         // Number of cols in X (k)
+    final int _ncats;         // Number of categorical cols in training frame
+    final double[] _normSub;  // For standardizing training data
+    final double[] _normMul;
+    final int _weightId;
+    Frame _xVecs;        // store X and X new
+
+    // Output
+    double _loss;    // Loss evaluated on A - XY using new X (and current Y)
+    double _xreg;    // Regularization evaluated on new X
+
+    UpdateXeY(GLRMParameters parms, Archetypes yt, double alpha, boolean update, int ncolA, int ncolX, int ncats,
+            double[] normSub, double[] normMul, GlrmLoss[] lossFunc, int weightId, Frame xVec) {
+      assert yt != null && yt.rank() == ncolX;
+      _parms = parms;
+      _yt = yt;
+      _lossFunc = lossFunc;
+      _alpha = alpha;
+      _update = update;
+      _ncolA = ncolA;
+      _ncolX = ncolX;
+      _xVecs = xVec;
+
+      // Info on A (cols 1 to ncolA of frame)
+      assert ncats <= ncolA;
+      _ncats = ncats;
+      _weightId = weightId;
+      _normSub = normSub;
+      _normMul = normMul;
+    }
+
+    private Chunk chk_xold(Chunk[] chks, int c) {
+      return chks[_ncolA + c];
+    }
+    private Chunk chk_xnew(Chunk[] chks, int c) {
+      return chks[_ncolA + _ncolX + c];
+    }
+
+    @SuppressWarnings("ConstantConditions")  // The method is too complex for IntelliJ
+    @Override public void map(Chunk[] cs) {
+      assert (_ncolA + 2*_ncolX) == cs.length;
+      double[] a = new double[_ncolA];
+      double[] tgrad = new double[_ncolX];  // new gradient calculation with reduced memory allocation
+      double[] u = new double[_ncolX];
+      double[] chkweight = _yt._weights; // weight per sample
+      Random rand = RandomUtils.getRNG(0);
+      _loss = _xreg = 0;
+      double[] xy = null;
+      double[] prod = null;
+      if (_yt._numLevels[0] > 0) {
+        xy = new double[_yt._numLevels[0]]; // maximum categorical level column is always the first one
+        prod = new double[_yt._numLevels[0]];
+      }
+
+      for (int row = 0; row < cs[0]._len; row++) {
+        rand.setSeed(_parms._seed + cs[0].start() + row); //global row ID determines the seed
+        Arrays.fill(tgrad, 0.0);  // temporary gradient for comparison
+
+        // Copy old working copy of X to current X if requested
+        if (_update) {
+          for (int k = 0; k < _ncolX; k++)
+            chk_xold(cs, k).set(row, chk_xnew(cs, k).atd(row));
+        }
+
+        // Compute gradient of objective at row
+        // Categorical columns
+        for (int j = 0; j < _ncats; j++) {
+          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
+          a[j] = cs[j].atd(row);
+          int catColJLevel = _yt._numLevels[j];
+          Arrays.fill(xy, 0, catColJLevel, 0);  // reset xy before accumulate sum
+
+          // Calculate x_i * Y_j where Y_j is sub-matrix corresponding to categorical col j
+          for (int level = 0; level < catColJLevel ; level++) {
+            for (int k = 0; k < _ncolX; k++) {
+              xy[level] += chk_xold(cs, k).atd(row) * _yt.getCat(j, level, k);
+            }
+          }
+
+          // Gradient wrt x_i is matrix product \grad L_{i,j}(x_i * Y_j, A_{i,j}) * Y_j'
+          double[] weight = _lossFunc[j].mlgrad(xy, (int) a[j], prod, catColJLevel );
+          if (_yt._transposed) {
+            for (int c = 0; c < catColJLevel ; c++) {
+              int cidx = _yt.getCatCidx(j, c);
+              double weights = chkweight[j] * chkweight[c];
+              double[] yArchetypes = _yt._archetypes[cidx];
+              for (int k = 0; k < _ncolX; k++)
+                tgrad[k] += weights * yArchetypes[k];
+
+            }
+          } else {
+            for (int c = 0; c < catColJLevel; c++) {
+              int cidx = _yt.getCatCidx(j, c);
+              double weights = chkweight[j] * chkweight[c];
+
+              for (int k = 0; k < _ncolX; k++)
+                tgrad[k] += weights * _yt._archetypes[k][cidx];
+            }
+          }
+        }
+
+        // Numeric columns
+        for (int j = _ncats; j < _ncolA; j++) {
+          int js = j - _ncats;
+          a[j] = cs[j].atd(row);
+          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
+
+          // Inner product x_i * y_j
+          double xy1 = 0;
+          for (int k = 0; k < _ncolX; k++)
+            xy1 += chk_xold(cs, k).atd(row) * _yt.getNum(js, k);
+
+          // Sum over y_j weighted by gradient of loss \grad L_{i,j}(x_i * y_j, A_{i,j})
+          double weight = chkweight[j] * _lossFunc[j].lgrad(xy1, (a[j] - _normSub[js]) * _normMul[js]);
+          for (int k = 0; k < _ncolX; k++)
+            tgrad[k] += weight * _yt.getNum(js, k);
+        }
+
+        // Update row x_i of working copy with new values
+        for (int k = 0; k < _ncolX; k++) {
+          double xold = chk_xold(cs, k).atd(row);   // Old value of x_i
+          u[k] = xold - _alpha * tgrad[k];
+        }
+        double[] xnew = _parms._regularization_x.rproxgrad(u, _alpha*_parms._gamma_x, rand);
+        _xreg += _parms._regularization_x.regularize(xnew);
+        for (int k = 0; k < _ncolX; k++)
+          chk_xnew(cs, k).set(row,xnew[k]);
+
+        // Compute loss function using new x_i
+        // Categorical columns
+        for (int j = 0; j < _ncats; j++) {
+          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
+          multVecArrFast(xnew, prod, _yt, j);
+          _loss +=  _lossFunc[j].mloss(prod, (int) a[j], _yt._numLevels[j]);
+        }
+
+        // Numeric columns
+        for (int j = _ncats; j < _ncolA; j++) {
+          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
+          int js = j - _ncats;
+          double txy = _yt.lmulNumCol(xnew, js);
+          _loss += _lossFunc[j].loss(txy, (a[j] - _normSub[js]) * _normMul[js]);
+        }
+      }
+    }
+
+
+    /* same as ArrayUtils.multVecArr() but faster I hope. */
+    private void multVecArrFast(double[] xnew, double[] xy, Archetypes yt, int j) {
+      int catColJLevel = yt._numLevels[j];
+      if (yt._transposed) {
+        for (int level = 0; level < catColJLevel; level++) {
+          int cidx = yt.getCatCidx(j, level);
+          double[] yArchetypes = yt._archetypes[cidx];
+          xy[level] = 0.0;
+          for (int k = 0; k < _ncolX; k++)
+            xy[level] += xnew[k] * yArchetypes[k];
+        }
+      } else {
+        for (int level = 0; level < catColJLevel; level++) {
+          int cidx = yt.getCatCidx(j, level);
+          xy[level] = 0.0;
+          for (int k = 0; k < _ncolX; k++)
+            xy[level] += xnew[k] * yt._archetypes[k][cidx];
+        }
+      }
+    }
+
+    @Override public void reduce(UpdateXeY other) {
+      _loss += other._loss;
+      _xreg += other._xreg;
+    }
+  }
+
+
+  private static class UpdateY extends MRTask<UpdateY> {
     // Input
     GLRMParameters _parms;
     GlrmLoss[] _lossFunc;
@@ -1562,7 +1745,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     double[][] _ytnew;  // New Y matrix
     double _yreg;       // Regularization evaluated on new Y
 
-    UpdateXW(GLRMParameters parms, Archetypes yt, double alpha, int ncolA, int ncolX, int ncats, double[] normSub,
+    UpdateY(GLRMParameters parms, Archetypes yt, double alpha, int ncolA, int ncolX, int ncats, double[] normSub,
             double[] normMul, GlrmLoss[] lossFunc, int weightId) {
       assert yt != null && yt.rank() == ncolX;
       _parms = parms;
@@ -1650,7 +1833,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       }
     }
 
-    @Override public void reduce(UpdateXW other) {
+    @Override public void reduce(UpdateY other) {
       ArrayUtils.add(_ytnew, other._ytnew);
     }
 
@@ -1669,6 +1852,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       }
     }
   }
+
 
 
   private static class UpdateY extends MRTask<UpdateY> {
