@@ -131,7 +131,7 @@ public class SensitivityAnalysis {
         public void map(Chunk[] cs, NewChunk nc) {
             for (int i = 0; i < cs[0]._len; i++) {
                 double d = 0;
-                for (int j = 0; j < _numClasses; j++) {
+                for (int j = 1; j < _numClasses; j++) {
                     double val = Math.abs(cs[j].atd(i) - cs[j + _numClasses].atd(i));
                     d += val;
                 }
