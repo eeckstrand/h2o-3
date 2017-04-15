@@ -6,6 +6,7 @@ import water.MRTask;
 import water.ParallelizationTask;
 import water.fvec.Chunk;
 import water.fvec.Frame;
+import water.fvec.NewChunk;
 import water.fvec.Vec;
 import water.DKV;
 import water.H2O;
@@ -16,7 +17,7 @@ public class SensitivityAnalysis {
     public static Frame sensitivyAnalysis(Model m, Frame fr){
 
         Frame sensitivityAnalysisFrame = new Frame();
-        sensitivityAnalysisFrame.add("BasePred",getBasePredictions(m,fr));
+        sensitivityAnalysisFrame.add("BasePred", getBasePredictions(m, fr)[0]);
         String[] predictors = m._output._names;
 
         SensitivityAnalysisPass[] tasks = new SensitivityAnalysisPass[predictors.length-1];
@@ -29,7 +30,7 @@ public class SensitivityAnalysis {
         long start = System.currentTimeMillis();
         H2O.submitTask(sensitivityCollector).join();
         for(int i =0; i < tasks.length; i++){
-            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor,tasks[i]._result);
+            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor,tasks[i]._result[0]);
         }
         Log.info("Sensitivity Analysis finished in " +
                 (System.currentTimeMillis()-start)/1000. +
@@ -45,7 +46,7 @@ public class SensitivityAnalysis {
         private final Frame _frame;
         private final Model _model;
         private final String _predictor;
-        Vec _result;
+        Vec[] _result;
 
         public SensitivityAnalysisPass(Frame sensitivityFrame, Frame fr, Model m, String predictor){
             _sensitivityFrame = sensitivityFrame;
@@ -56,35 +57,36 @@ public class SensitivityAnalysis {
 
         @Override
         public void compute2() {
-            _result = getNewPredictions(_model,_frame,_predictor);
-            new DiffTask().doAll(_sensitivityFrame.vec(0),_result);
+            if(_model._parms._distribution == DistributionFamily.multinomial){
+                _result = getNewPredictions(_model,_frame,_predictor);
+                new MultiDiffTask(_model._output.nclasses()).doAll(_sensitivityFrame.vec(0), _result[0]);
+            }else {
+                _result = getNewPredictions(_model, _frame, _predictor);
+                new DiffTask().doAll(_sensitivityFrame.vec(0), _result[0]);
+            }
             Log.info("Completed Sensitivity Analysis for column: " + _predictor);
             tryComplete();
         }
 
     }
 
-    public static Vec getBasePredictions(Model m, Frame fr){
+    public static Vec[] getBasePredictions(Model m, Frame fr){
 
         Frame basePredsFr = m.score(fr,null,null,false);
 
         if(m._parms._distribution == DistributionFamily.bernoulli) {
             Vec basePreds = basePredsFr.remove(2);
             basePredsFr.delete();
-            return basePreds;
-        } else if(m._parms._distribution == DistributionFamily.multinomial) {
-            Vec basePreds = basePredsFr.remove(0);
-            basePredsFr.delete();
-            return basePreds;
+            return new Vec[] {basePreds};
         } else {
             Vec basePreds = basePredsFr.remove(0);
             basePredsFr.delete();
-            return basePreds;
+            return new Vec[] {basePreds};
         }
 
     }
 
-    public static Vec getNewPredictions(Model m, Frame fr, String colToDrop) {
+    public static Vec[] getNewPredictions(Model m, Frame fr, String colToDrop) {
 
         Frame workerFrame = new Frame(fr);
         workerFrame.remove(colToDrop);
@@ -94,15 +96,11 @@ public class SensitivityAnalysis {
             if (m._parms._distribution == DistributionFamily.bernoulli) {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(2);
                 modifiedPredictionsFr.delete();
-                return modifiedPrediction;
-            } else if (m._parms._distribution == DistributionFamily.multinomial) {
-                Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
-                modifiedPredictionsFr.delete();
-                return modifiedPrediction;
+                return new Vec[] {modifiedPrediction};
             } else {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
                 modifiedPredictionsFr.delete();
-                return modifiedPrediction;
+                return new Vec[] {modifiedPrediction};
             }
         } finally{
             DKV.remove(workerFrame._key);
@@ -121,6 +119,26 @@ public class SensitivityAnalysis {
         }
     }
 
+    private static class MultiDiffTask extends MRTask<MultiDiffTask>{
+
+        private int _numClasses;
+
+        public MultiDiffTask(int numClasses){
+            _numClasses = numClasses;
+        }
+
+        @Override
+        public void map(Chunk[] cs, NewChunk nc) {
+            for (int i = 0; i < cs[0]._len; i++) {
+                double d = 0;
+                for (int j = 0; j < _numClasses; j++) {
+                    double val = Math.abs(cs[j].atd(i) - cs[j + _numClasses].atd(i));
+                    d += val;
+                }
+                nc.addNum(d);
+            }
+        }
+    }
 }
 
 
