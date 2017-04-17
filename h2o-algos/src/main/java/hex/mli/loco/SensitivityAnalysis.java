@@ -17,7 +17,12 @@ public class SensitivityAnalysis {
     public static Frame sensitivyAnalysis(Model m, Frame fr){
 
         Frame sensitivityAnalysisFrame = new Frame();
-        sensitivityAnalysisFrame.add("BasePred", getBasePredictions(m, fr)[0]);
+        if(m._parms._distribution != DistributionFamily.multinomial) {
+            sensitivityAnalysisFrame.add("BasePred", getBasePredictions(m, fr)[0]);
+        } else {
+            sensitivityAnalysisFrame.add(new Frame(getBasePredictions(m, fr)));
+        }
+
         String[] predictors = m._output._names;
 
         SensitivityAnalysisPass[] tasks = new SensitivityAnalysisPass[predictors.length-1];
@@ -30,8 +35,8 @@ public class SensitivityAnalysis {
         long start = System.currentTimeMillis();
         Log.info("Starting Sensitivity Analysis for model " + m._key + " and frame " + fr._key);
         H2O.submitTask(sensitivityCollector).join();
-        for(int i =0; i < tasks.length; i++){
-            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor,tasks[i]._result[0]);
+        for (int i = 0; i < tasks.length; i++) {
+            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor, tasks[i]._result[0]);
         }
         Log.info("Finished Sensitivity Analysis for model " + m._key + " and frame " + fr._key +
                 " in " + (System.currentTimeMillis()-start)/1000. + " seconds for " + (predictors.length-1) + " columns");
@@ -58,9 +63,10 @@ public class SensitivityAnalysis {
         @Override
         public void compute2() {
             if(_model._parms._distribution == DistributionFamily.multinomial){
-                _result = getNewPredictions(_model,_frame,_predictor);
-                new MultiDiffTask(_model._output.nclasses()).doAll(_sensitivityFrame.vec(0), _result[0]);
-            }else {
+                Vec[] predTmp = getNewPredictions(_model,_frame,_predictor);
+                _result = new MultiDiffTask(_model._output.nclasses()).doAll(Vec.T_NUM, new Frame().add(_sensitivityFrame).add(new Frame(predTmp))).outputFrame().vecs();
+                for (Vec v : predTmp) v.remove();
+            } else {
                 _result = getNewPredictions(_model, _frame, _predictor);
                 new DiffTask().doAll(_sensitivityFrame.vec(0), _result[0]);
             }
@@ -78,6 +84,8 @@ public class SensitivityAnalysis {
             Vec basePreds = basePredsFr.remove(2);
             basePredsFr.delete();
             return new Vec[] {basePreds};
+        }else if(m._parms._distribution == DistributionFamily.multinomial){
+            return basePredsFr.vecs();
         } else {
             Vec basePreds = basePredsFr.remove(0);
             basePredsFr.delete();
@@ -97,6 +105,8 @@ public class SensitivityAnalysis {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(2);
                 modifiedPredictionsFr.delete();
                 return new Vec[] {modifiedPrediction};
+            } else if(m._parms._distribution == DistributionFamily.multinomial){
+                return modifiedPredictionsFr.vecs();
             } else {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
                 modifiedPredictionsFr.delete();
