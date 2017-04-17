@@ -28,13 +28,13 @@ public class SensitivityAnalysis {
 
         ParallelizationTask sensitivityCollector = new ParallelizationTask<>(tasks);
         long start = System.currentTimeMillis();
+        Log.info("Starting Sensitivity Analysis for model " + m._key + " and frame " + fr._key);
         H2O.submitTask(sensitivityCollector).join();
         for(int i =0; i < tasks.length; i++){
             sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor,tasks[i]._result[0]);
         }
-        Log.info("Sensitivity Analysis finished in " +
-                (System.currentTimeMillis()-start)/1000. +
-                " seconds for " + predictors.length + " columns");
+        Log.info("Finished Sensitivity Analysis for model " + m._key + " and frame " + fr._key +
+                " in " + (System.currentTimeMillis()-start)/1000. + " seconds for " + (predictors.length-1) + " columns");
 
         return sensitivityAnalysisFrame;
 
