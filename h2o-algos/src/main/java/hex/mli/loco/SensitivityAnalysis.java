@@ -21,6 +21,7 @@ public class SensitivityAnalysis {
             sensitivityAnalysisFrame.add("BasePred", getBasePredictions(m, fr)[0]);
         } else {
             sensitivityAnalysisFrame.add(new Frame(getBasePredictions(m, fr)));
+            sensitivityAnalysisFrame._names[0] = "BasePred";
         }
 
         String[] predictors = m._output._names;
@@ -35,6 +36,15 @@ public class SensitivityAnalysis {
         long start = System.currentTimeMillis();
         Log.info("Starting Sensitivity Analysis for model " + m._key + " and frame " + fr._key);
         H2O.submitTask(sensitivityCollector).join();
+
+        if(m._parms._distribution == DistributionFamily.multinomial){
+            int[] colsToRemove = new int[sensitivityAnalysisFrame.numCols()-1];
+            for(int i =0; i<colsToRemove.length; i++){
+                colsToRemove[i] = i+1;
+            }
+            sensitivityAnalysisFrame.remove(colsToRemove);
+        }
+
         for (int i = 0; i < tasks.length; i++) {
             sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor, tasks[i]._result[0]);
         }
