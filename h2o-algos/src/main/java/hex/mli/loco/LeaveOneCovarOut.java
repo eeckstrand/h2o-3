@@ -2,7 +2,6 @@ package hex.mli.loco;
 
 import hex.Model;
 import hex.ModelCategory;
-import hex.genmodel.utils.DistributionFamily;
 import water.MRTask;
 import water.ParallelizationTask;
 import water.fvec.Chunk;
@@ -12,13 +11,14 @@ import water.fvec.Vec;
 import water.DKV;
 import water.H2O;
 import water.util.Log;
+import water.Iced;
 
-public class LeaveOneCovarOut {
+public class LeaveOneCovarOut extends Iced {
 
     public static Frame leaveOneCovarOut(Model m, Frame fr){
 
         Frame locoAnalysisFrame = new Frame();
-        if(m._parms._distribution != DistributionFamily.multinomial) {
+        if(m._output.getModelCategory() != ModelCategory.Multinomial) {
             locoAnalysisFrame.add("base_pred", getBasepredictions(m, fr)[0]);
         } else {
             locoAnalysisFrame.add(new Frame(getBasepredictions(m, fr)));
@@ -38,7 +38,7 @@ public class LeaveOneCovarOut {
         Log.info("Starting Leave One Covariate Out (LOCO) analysis for model " + m._key + " and frame " + fr._key);
         H2O.submitTask(locoCollector).join();
 
-        if(m._parms._distribution == DistributionFamily.multinomial){
+        if(m._output.getModelCategory() == ModelCategory.Multinomial){
             int[] colsToRemove = new int[locoAnalysisFrame.numCols()-1];
             for(int i =0; i<colsToRemove.length; i++){
                 colsToRemove[i] = i+1;
@@ -73,7 +73,7 @@ public class LeaveOneCovarOut {
 
         @Override
         public void compute2() {
-            if(_model._parms._distribution == DistributionFamily.multinomial){
+            if(_model._output.getModelCategory() == ModelCategory.Multinomial){
                 Vec[] predTmp = getNewPredictions(_model,_frame,_predictor);
                 _result = new MultiDiffTask(_model._output.nclasses()).doAll(Vec.T_NUM, new Frame().add(_locoFrame).add(new Frame(predTmp))).outputFrame().vecs();
                 for (Vec v : predTmp) v.remove();
@@ -91,11 +91,11 @@ public class LeaveOneCovarOut {
 
         Frame basePredsFr = m.score(fr,null,null,false);
 
-        if(m._parms._distribution == DistributionFamily.bernoulli || m._output.getModelCategory() == ModelCategory.Binomial) {
+        if(m._output.getModelCategory() == ModelCategory.Binomial) {
             Vec basePreds = basePredsFr.remove(2);
             basePredsFr.delete();
             return new Vec[] {basePreds};
-        }else if(m._parms._distribution == DistributionFamily.multinomial || m._output.getModelCategory() == ModelCategory.Multinomial){
+        }else if(m._output.getModelCategory() == ModelCategory.Multinomial){
             return basePredsFr.vecs();
         } else {
             Vec basePreds = basePredsFr.remove(0);
@@ -112,11 +112,11 @@ public class LeaveOneCovarOut {
         DKV.put(workerFrame);
         Frame modifiedPredictionsFr = m.score(workerFrame,null,null,false);
         try {
-            if (m._parms._distribution == DistributionFamily.bernoulli || m._output.getModelCategory() == ModelCategory.Binomial) {
+            if (m._output.getModelCategory() == ModelCategory.Binomial) {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(2);
                 modifiedPredictionsFr.delete();
                 return new Vec[] {modifiedPrediction};
-            } else if(m._parms._distribution == DistributionFamily.multinomial || m._output.getModelCategory() == ModelCategory.Multinomial){
+            } else if(m._output.getModelCategory() == ModelCategory.Multinomial){
                 return modifiedPredictionsFr.vecs();
             } else {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
