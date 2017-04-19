@@ -6,7 +6,7 @@ import water.api.schemas3.KeyV3;
 import water.api.schemas3.SchemaV3;
 import water.api.schemas3.KeyV3.FrameKeyV3;
 
-public class SensitivityAnalysisV3 extends SchemaV3<Iced, SensitivityAnalysisV3> {
+public class LeaveOneCovarOutV3 extends SchemaV3<Iced, LeaveOneCovarOutV3> {
 
     @API(help="supervised model", required = true, direction = API.Direction.INPUT)
     public KeyV3.ModelKeyV3 model;

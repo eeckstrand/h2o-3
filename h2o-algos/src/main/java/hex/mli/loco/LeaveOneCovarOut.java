@@ -1,6 +1,7 @@
 package hex.mli.loco;
 
 import hex.Model;
+import hex.ModelCategory;
 import hex.genmodel.utils.DistributionFamily;
 import water.MRTask;
 import water.ParallelizationTask;
@@ -12,59 +13,59 @@ import water.DKV;
 import water.H2O;
 import water.util.Log;
 
-public class SensitivityAnalysis {
+public class LeaveOneCovarOut {
 
-    public static Frame sensitivyAnalysis(Model m, Frame fr){
+    public static Frame leaveOneCovarOut(Model m, Frame fr){
 
-        Frame sensitivityAnalysisFrame = new Frame();
+        Frame locoAnalysisFrame = new Frame();
         if(m._parms._distribution != DistributionFamily.multinomial) {
-            sensitivityAnalysisFrame.add("BasePred", getBasePredictions(m, fr)[0]);
+            locoAnalysisFrame.add("base_pred", getBasepredictions(m, fr)[0]);
         } else {
-            sensitivityAnalysisFrame.add(new Frame(getBasePredictions(m, fr)));
-            sensitivityAnalysisFrame._names[0] = "BasePred";
+            locoAnalysisFrame.add(new Frame(getBasepredictions(m, fr)));
+            locoAnalysisFrame._names[0] = "base_pred";
         }
 
         String[] predictors = m._output._names;
 
-        SensitivityAnalysisPass[] tasks = new SensitivityAnalysisPass[predictors.length-1];
+        LeaveOneCovariateOutPass[] tasks = new LeaveOneCovariateOutPass[predictors.length-1];
 
         for(int i = 0; i < tasks.length; i++){
-            tasks[i] = new SensitivityAnalysisPass(sensitivityAnalysisFrame,fr,m,predictors[i]);
+            tasks[i] = new LeaveOneCovariateOutPass(locoAnalysisFrame,fr,m,predictors[i]);
         }
 
-        ParallelizationTask sensitivityCollector = new ParallelizationTask<>(tasks);
+        ParallelizationTask locoCollector = new ParallelizationTask<>(tasks);
         long start = System.currentTimeMillis();
-        Log.info("Starting Sensitivity Analysis for model " + m._key + " and frame " + fr._key);
-        H2O.submitTask(sensitivityCollector).join();
+        Log.info("Starting Leave One Covariate Out (LOCO) analysis for model " + m._key + " and frame " + fr._key);
+        H2O.submitTask(locoCollector).join();
 
         if(m._parms._distribution == DistributionFamily.multinomial){
-            int[] colsToRemove = new int[sensitivityAnalysisFrame.numCols()-1];
+            int[] colsToRemove = new int[locoAnalysisFrame.numCols()-1];
             for(int i =0; i<colsToRemove.length; i++){
                 colsToRemove[i] = i+1;
             }
-            sensitivityAnalysisFrame.remove(colsToRemove);
+            locoAnalysisFrame.remove(colsToRemove);
         }
 
         for (int i = 0; i < tasks.length; i++) {
-            sensitivityAnalysisFrame.add("PredDrop_" + tasks[i]._predictor, tasks[i]._result[0]);
+            locoAnalysisFrame.add("rc_" + tasks[i]._predictor, tasks[i]._result[0]);
         }
-        Log.info("Finished Sensitivity Analysis for model " + m._key + " and frame " + fr._key +
+        Log.info("Finished Leave One Covariate Out (LOCO) analysis for model " + m._key + " and frame " + fr._key +
                 " in " + (System.currentTimeMillis()-start)/1000. + " seconds for " + (predictors.length-1) + " columns");
 
-        return sensitivityAnalysisFrame;
+        return locoAnalysisFrame;
 
     }
 
-    private static class SensitivityAnalysisPass extends H2O.H2OCountedCompleter<SensitivityAnalysisPass>{
+    private static class LeaveOneCovariateOutPass extends H2O.H2OCountedCompleter<LeaveOneCovariateOutPass>{
 
-        private final Frame _sensitivityFrame;
+        private final Frame _locoFrame;
         private final Frame _frame;
         private final Model _model;
         private final String _predictor;
         Vec[] _result;
 
-        public SensitivityAnalysisPass(Frame sensitivityFrame, Frame fr, Model m, String predictor){
-            _sensitivityFrame = sensitivityFrame;
+        public LeaveOneCovariateOutPass(Frame locoFrame, Frame fr, Model m, String predictor){
+            _locoFrame = locoFrame;
             _frame = fr;
             _model = m;
             _predictor = predictor;
@@ -74,27 +75,27 @@ public class SensitivityAnalysis {
         public void compute2() {
             if(_model._parms._distribution == DistributionFamily.multinomial){
                 Vec[] predTmp = getNewPredictions(_model,_frame,_predictor);
-                _result = new MultiDiffTask(_model._output.nclasses()).doAll(Vec.T_NUM, new Frame().add(_sensitivityFrame).add(new Frame(predTmp))).outputFrame().vecs();
+                _result = new MultiDiffTask(_model._output.nclasses()).doAll(Vec.T_NUM, new Frame().add(_locoFrame).add(new Frame(predTmp))).outputFrame().vecs();
                 for (Vec v : predTmp) v.remove();
             } else {
                 _result = getNewPredictions(_model, _frame, _predictor);
-                new DiffTask().doAll(_sensitivityFrame.vec(0), _result[0]);
+                new DiffTask().doAll(_locoFrame.vec(0), _result[0]);
             }
-            Log.info("Completed Sensitivity Analysis for column: " + _predictor);
+            Log.info("Completed Leave One Covariate Out (LOCO) Analysis for column: " + _predictor);
             tryComplete();
         }
 
     }
 
-    public static Vec[] getBasePredictions(Model m, Frame fr){
+    public static Vec[] getBasepredictions(Model m, Frame fr){
 
         Frame basePredsFr = m.score(fr,null,null,false);
 
-        if(m._parms._distribution == DistributionFamily.bernoulli) {
+        if(m._parms._distribution == DistributionFamily.bernoulli || m._output.getModelCategory() == ModelCategory.Binomial) {
             Vec basePreds = basePredsFr.remove(2);
             basePredsFr.delete();
             return new Vec[] {basePreds};
-        }else if(m._parms._distribution == DistributionFamily.multinomial){
+        }else if(m._parms._distribution == DistributionFamily.multinomial || m._output.getModelCategory() == ModelCategory.Multinomial){
             return basePredsFr.vecs();
         } else {
             Vec basePreds = basePredsFr.remove(0);
@@ -111,11 +112,11 @@ public class SensitivityAnalysis {
         DKV.put(workerFrame);
         Frame modifiedPredictionsFr = m.score(workerFrame,null,null,false);
         try {
-            if (m._parms._distribution == DistributionFamily.bernoulli) {
+            if (m._parms._distribution == DistributionFamily.bernoulli || m._output.getModelCategory() == ModelCategory.Binomial) {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(2);
                 modifiedPredictionsFr.delete();
                 return new Vec[] {modifiedPrediction};
-            } else if(m._parms._distribution == DistributionFamily.multinomial){
+            } else if(m._parms._distribution == DistributionFamily.multinomial || m._output.getModelCategory() == ModelCategory.Multinomial){
                 return modifiedPredictionsFr.vecs();
             } else {
                 Vec modifiedPrediction = modifiedPredictionsFr.remove(0);
@@ -130,7 +131,7 @@ public class SensitivityAnalysis {
 
     private static class DiffTask extends MRTask<DiffTask>{
         @Override public void map(Chunk[] c) {
-            Chunk _basePred = c[0]; //First column is always base predictions
+            Chunk _basePred = c[0];
             for(int chnk = 1; chnk < c.length; chnk++){
                 for(int row = 0; row < c[0]._len; row++){
                     c[chnk].set(row, c[chnk].atd(row) - _basePred.atd(row));
