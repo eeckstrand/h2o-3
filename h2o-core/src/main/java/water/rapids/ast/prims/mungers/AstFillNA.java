@@ -1,5 +1,6 @@
 package water.rapids.ast.prims.mungers;
 
+import water.H2O;
 import water.Key;
 import water.MRTask;
 import water.fvec.Chunk;
@@ -11,12 +12,18 @@ import water.rapids.ast.AstPrimitive;
 import water.rapids.ast.AstRoot;
 import water.rapids.vals.ValFrame;
 
+import java.util.Arrays;
+
 /**
  * Fill NA's from previous or future values.
  * <p/> Different from impute in that a new Frame must be returned. It is
  * not inplace b/c a MRTask will create race conditions that will prevent correct results.
  * This function allows a limit of values to fill forward
  * <p/>
+ * @param method Direction to fill either: forward or backward
+ * @param axis Along which axis to fill, 0 for columnar, 1 for row
+ * @param limit Max number of consecutive NA's to fill
+ * @return New Frame with filled values
  */
 public class AstFillNA extends AstPrimitive {
   @Override
@@ -42,19 +49,27 @@ public class AstFillNA extends AstPrimitive {
 
     // Column within frame being imputed
     final String method = asts[2].exec(env).getStr();
+    if (!(Arrays.asList("forward","backward")).contains(method.toLowerCase()))
+      throw new IllegalArgumentException("Method must be forward or backward");
+    // Not impl yet
+    if (method.toLowerCase() == "backward")
+      throw H2O.unimpl("Backward fillna not implemented yet");
+
     final int axis = (int) asts[3].exec(env).getNum();
+    if (!(Arrays.asList(0,1)).contains(axis))
+      throw new IllegalArgumentException("Axis must be 0 for columnar 1 for row");
+    if (axis == 1)
+      throw H2O.unimpl("FillNa along rows not implemented yet");
     final int limit = (int) asts[4].exec(env).getNum();
-    Frame res = new FillDirectional("forward",limit).doAll(fr.numCols(), Vec.T_NUM, fr).outputFrame();
+    Frame res = new FillForwardTask(limit).doAll(fr.numCols(), Vec.T_NUM, fr).outputFrame();
     res._key = Key.<Frame>make();
     return new ValFrame(res);
   }
 
-  private static class FillDirectional extends MRTask<FillDirectional> {
-    private final String _dir;
+  private static class FillForwardTask extends MRTask<FillForwardTask> {
     private final int _maxLen;
 
-    FillDirectional(String dir, int maxLen) {
-      _dir = dir;
+    FillForwardTask(int maxLen) {
       _maxLen = maxLen;
     }
 
@@ -94,10 +109,15 @@ public class AstFillNA extends AstPrimitive {
                 double fillVal = searchChunk.atd(searchStartIdx - searchIdx);
                 int fillCount = _maxLen - searchCount;
                 fillCount = Math.min(fillCount,cs[i]._len);
-                for (int f = 0; f<fillCount; f++) {
+                // We've searched back but maxlen isnt big enough to propagate here.
+                if (fillCount < 0)
+                  nc[i].addNA();
+                else if (fillCount == 0)
                   nc[i].addNum(fillVal);
-                  fillCount++;
-                }
+                else
+                  for (int f = 0; f<fillCount; f++) { nc[i].addNum(fillVal); }
+
+                fillCount = Math.max(1,fillCount);
                 j += (fillCount - 1);
               }
 
