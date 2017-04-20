@@ -109,6 +109,14 @@ public class AstFillNA extends AstPrimitive {
                 double fillVal = searchChunk.atd(searchStartIdx - searchIdx);
                 int fillCount = _maxLen - searchCount;
                 fillCount = Math.min(fillCount,cs[i]._len);
+                // How many fills forward from this row is ok?
+                int maxFill = 1;
+                int k = 1;
+                while(cs[i].isNA(j+k)) {
+                  k++;
+                  maxFill++;
+                }
+                fillCount = Math.min(maxFill, fillCount);
                 // We've searched back but maxlen isnt big enough to propagate here.
                 if (fillCount < 0)
                   nc[i].addNA();
