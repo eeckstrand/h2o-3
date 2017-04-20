@@ -3016,6 +3016,9 @@ h2o.deepfeatures <- function(object, data, layer) {
 
 #' @export
 h2o.loco <- function(model, frame, loco_frame_id){
+  if(!is(model, "H2OModel")) stop("model must be an H2OModel")
+  if(!is(frame, "H2OFrame")) stop("frame must be an H2OFrame")
+  if(!is.character(loco_frame_id)) stop("loco_frame_id must be of type character")
   parms = list()
   parms$model <- model@model_id
   parms$frame <- h2o.getId(frame)

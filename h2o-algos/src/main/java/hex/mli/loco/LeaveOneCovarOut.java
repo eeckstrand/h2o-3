@@ -109,7 +109,9 @@ public class LeaveOneCovarOut extends Iced {
     public static Vec[] getNewPredictions(Model m, Frame fr, String colToDrop) {
 
         Frame workerFrame = new Frame(fr);
-        workerFrame.remove(colToDrop);
+        Vec vecToReplace = fr.vec(colToDrop).makeCon(Double.NaN);
+        int vecToDropIdx = fr.find(colToDrop);
+        workerFrame.replace(vecToDropIdx,vecToReplace);
         DKV.put(workerFrame);
         Frame modifiedPredictionsFr = m.score(workerFrame,null,null,false);
         try {
@@ -126,6 +128,7 @@ public class LeaveOneCovarOut extends Iced {
             }
         } finally{
             DKV.remove(workerFrame._key);
+            DKV.remove(vecToReplace._key);
         }
 
     }

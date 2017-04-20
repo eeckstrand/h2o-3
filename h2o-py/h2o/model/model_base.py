@@ -181,6 +181,17 @@ class ModelBase(backwards_compatible()):
         j.poll()
         return h2o.get_frame(j.dest_key)
 
+    def loco(self, frame):
+
+        kwargs = {}
+        kwargs["model"] = self._id
+        kwargs["frame"] = frame.frame_id
+
+        j = H2OJob(h2o.api("POST /3/LeaveOneCovarOut",
+                   data=kwargs),"loco")
+        j.poll()
+        return h2o.get_frame(j.dest_key)
+
 
     def weights(self, matrix_id=0):
         """
