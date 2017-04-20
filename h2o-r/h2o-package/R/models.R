@@ -165,6 +165,16 @@ h2o.getFutureModel <- function(object) {
   h2o.getModel(object@model_id)
 }
 
+#' Get future frame
+#'
+#' @rdname h2o.getFutureFrame
+#' @param object
+#' @export
+h2o.getFutureFrame <- function(object) {
+  .h2o.__waitOnJob(object@job_key)
+  h2o.getFrame(object@loco_frame)
+}
+
 .h2o.prepareModelParameters <- function(algo, params, is_supervised) {
   if (!is.null(params$training_frame))
     params$training_frame <- chk.H2OFrame(params$training_frame)
@@ -3003,3 +3013,17 @@ h2o.deepfeatures <- function(object, data, layer) {
   .h2o.__waitOnJob(job_key)
   h2o.getFrame(dest_key)
 }
+
+#' @export
+h2o.loco <- function(model, frame, loco_frame_id){
+  parms = list()
+  parms$model <- model@model_id
+  parms$frame <- h2o.getId(frame)
+  if(!missing(loco_frame_id)){
+    parms$loco_frame_id = loco_frame_id
+  }
+  res <- .h2o.__remoteSend(method = "POST", h2oRestApiVersion = 3, page = "LeaveOneCovarOut", .params = parms)
+  .h2o.__waitOnJob(res$key$name)
+  return(h2o.getFrame(res$dest$name))
+}
+

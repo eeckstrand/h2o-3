@@ -19,20 +19,20 @@ public class LeaveOneCovarOutHandler extends Handler {
 
         final Frame frame = FramesHandler.getFromDKV("frame", args.frame.key());
         final Model model= ModelsHandler.getFromDKV("model",args.model.key());
-        final String loco_frame_id = args.loco_frame;
+        String loco_frame_id = args.loco_frame_id;
         assert model.isSupervised() : "Model " + model._key + " is not supervised.";
 
         if(loco_frame_id == null){
-            args.loco_frame = "loco_"+frame._key.toString() + "_" + model._key.toString();
+            loco_frame_id = "loco_"+frame._key.toString() + "_" + model._key.toString();
         }
 
         final Job<Frame> j = new Job(Key.make(loco_frame_id), Frame.class.getName(), "loco_prediction");
-
+        final String dest_frame_id = loco_frame_id;
         H2O.H2OCountedCompleter work = new H2O.H2OCountedCompleter() {
                 @Override
                 public void compute2() {
-                    Frame sensitivityAnalysisFrame = LeaveOneCovarOut.leaveOneCovarOut(model,frame);
-                    sensitivityAnalysisFrame._key = Key.make(loco_frame_id);
+                    Frame sensitivityAnalysisFrame = LeaveOneCovarOut.leaveOneCovarOut(model,frame,j);
+                    sensitivityAnalysisFrame._key = Key.make(dest_frame_id);
                     DKV.put(sensitivityAnalysisFrame._key,sensitivityAnalysisFrame);
                     tryComplete();
                 }

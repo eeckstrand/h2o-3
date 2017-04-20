@@ -4,7 +4,6 @@ import water.Iced;
 import water.api.API;
 import water.api.schemas3.KeyV3;
 import water.api.schemas3.SchemaV3;
-import water.api.schemas3.KeyV3.FrameKeyV3;
 
 public class LeaveOneCovarOutV3 extends SchemaV3<Iced, LeaveOneCovarOutV3> {
 
@@ -15,6 +14,6 @@ public class LeaveOneCovarOutV3 extends SchemaV3<Iced, LeaveOneCovarOutV3> {
     public KeyV3.FrameKeyV3 frame;
 
     @API(help="Destination id for this LOCO job; auto-generated if not specified.", direction = API.Direction.INOUT, required = false)
-    public String loco_frame;
+    public String loco_frame_id;
 
 }

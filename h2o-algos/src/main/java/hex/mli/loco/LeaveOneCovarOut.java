@@ -12,10 +12,11 @@ import water.DKV;
 import water.H2O;
 import water.util.Log;
 import water.Iced;
+import water.Job;
 
 public class LeaveOneCovarOut extends Iced {
 
-    public static Frame leaveOneCovarOut(Model m, Frame fr){
+    public static Frame leaveOneCovarOut(Model m, Frame fr, Job job){
 
         Frame locoAnalysisFrame = new Frame();
         if(m._output.getModelCategory() != ModelCategory.Multinomial) {
@@ -33,7 +34,7 @@ public class LeaveOneCovarOut extends Iced {
             tasks[i] = new LeaveOneCovariateOutPass(locoAnalysisFrame,fr,m,predictors[i]);
         }
 
-        ParallelizationTask locoCollector = new ParallelizationTask<>(tasks);
+        ParallelizationTask locoCollector = new ParallelizationTask<>(tasks, job);
         long start = System.currentTimeMillis();
         Log.info("Starting Leave One Covariate Out (LOCO) analysis for model " + m._key + " and frame " + fr._key);
         H2O.submitTask(locoCollector).join();
